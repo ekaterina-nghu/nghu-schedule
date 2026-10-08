@@ -3563,4 +3563,291 @@ if(document.getElementById("v26_panel"))document.getElementById("v26_panel").ins
   window.v28PushSync=push; window.v28PullSync=pull;
 })();
 </script>
-</body></html>
+<script>
+/* НГХУ — полное расписание: все группы + группа + преподаватель + аудитория + даты */
+(function () {
+  const dayNames = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб"];
+
+  function dateFor(week, day) {
+    if (typeof v16DateFor !== "function") return "";
+    const d = v16DateFor(Number(week), Number(day));
+    if (!d) return "";
+    const p = String(d).split("-");
+    return p.length === 3 ? p[2] + "." + p[1] + "." + p[0] : d;
+  }
+
+  function weeksList() {
+    if (typeof v16WeeksForSemester === "function") {
+      return v16WeeksForSemester();
+    }
+    const n = Number(settings.semester || 1) === 1 ? 16 : 20;
+    return Array.from({length:n}, (_,i) => ({
+      week:i + 1,
+      start:"",
+      end:""
+    }));
+  }
+
+  function renderFullSchedule() {
+    const week = Number(settings.currentWeek || 1);
+    const mode = settings.scheduleView || "all";
+    const group = settings.currentGroup || DATA.groups[0] || "";
+    const teacher = settings.currentTeacher || "";
+    const room = settings.currentRoom || "";
+
+    const allLessons = lessons.filter(l => v04WeekOf(l) === week);
+
+    const visibleLessons = allLessons.filter(l => {
+      if (mode === "group") {
+        return (l.groups || []).includes(group);
+      }
+      if (mode === "teacher") {
+        return (l.teacher || "") === teacher;
+      }
+      if (mode === "room") {
+        return (l.room || "") === room;
+      }
+      return true;
+    });
+
+    const teachers = [...new Set(
+      DATA.streams.map(x => x.teacher).filter(Boolean)
+    )].sort();
+
+    const rooms = [...new Set(
+      [
+        ...(settings.roomList || []),
+        ...lessons.map(x => x.room).filter(Boolean)
+      ]
+    )].sort();
+
+    const weeks = weeksList();
+    const weekInfo = weeks.find(x => Number(x.week) === week);
+
+    const period = weekInfo && weekInfo.start && weekInfo.end
+      ? weekInfo.start.split("-").reverse().join(".") +
+        " – " +
+        weekInfo.end.split("-").reverse().join(".")
+      : "";
+
+    const safe = x => typeof esc === "function"
+      ? esc(x)
+      : String(x ?? "");
+
+    function lessonCard(l) {
+      const conflicts = typeof v04Conflicts === "function"
+        ? v04Conflicts(l, l.id)
+        : [];
+
+      return `
+        <div
+          class="lesson ${conflicts.length ? "conflict" : ""}"
+          draggable="true"
+          data-id="${safe(l.id)}"
+          onclick="event.stopPropagation();v04EditLesson(this.dataset.id)"
+          ondragstart="v07DragStart(this.dataset.id,event)"
+          style="cursor:pointer"
+        >
+          <b>${safe(l.subject || l.subj || "Без дисциплины")}</b>
+          <div class="small">
+            <b>Группа:</b> ${safe((l.groups || []).join(", "))}
+          </div>
+          <div class="small">
+            ${safe(l.teacher || "Без преподавателя")}
+          </div>
+          <div class="small">
+            ${safe(l.room || "Аудитория не задана")}
+          </div>
+          ${conflicts.length
+            ? '<span class="bad">КОНФЛИКТ</span>'
+            : ""}
+        </div>
+      `;
+    }
+
+    const modeButtons = [
+      ["all", "Все расписание"],
+      ["group", "По группе"],
+      ["teacher", "По преподавателю"],
+      ["room", "По аудитории"]
+    ].map(([value, title]) => `
+      <button
+        class="btn"
+        onclick="settings.scheduleView='${value}';save();renderSchedule()"
+      >
+        ${title}
+      </button>
+    `).join("");
+
+    let selector = "";
+
+    if (mode === "group") {
+      selector = `
+        <label>
+          Группа
+          <select onchange="settings.currentGroup=this.value;save();renderSchedule()">
+            ${DATA.groups.map(g => `
+              <option ${g === group ? "selected" : ""}>
+                ${safe(g)}
+              </option>
+            `).join("")}
+          </select>
+        </label>
+      `;
+    }
+
+    if (mode === "teacher") {
+      selector = `
+        <label>
+          Преподаватель
+          <select onchange="settings.currentTeacher=this.value;save();renderSchedule()">
+            <option value="">Выберите преподавателя</option>
+            ${teachers.map(t => `
+              <option ${t === teacher ? "selected" : ""}>
+                ${safe(t)}
+              </option>
+            `).join("")}
+          </select>
+        </label>
+      `;
+    }
+
+    if (mode === "room") {
+      selector = `
+        <label>
+          Аудитория
+          <select onchange="settings.currentRoom=this.value;save();renderSchedule()">
+            <option value="">Выберите аудиторию</option>
+            ${rooms.map(r => `
+              <option ${r === room ? "selected" : ""}>
+                ${safe(r)}
+              </option>
+            `).join("")}
+          </select>
+        </label>
+      `;
+    }
+
+    const weekButtons = weeks.map(w => `
+      <option value="${w.week}" ${Number(w.week) === week ? "selected" : ""}>
+        ${w.week} неделя
+      </option>
+    `).join("");
+
+    const headers = dayNames.map((name, i) => `
+      <div class="head">
+        <b>${name}</b><br>
+        <span class="small">${dateFor(week, i)}</span>
+      </div>
+    `).join("");
+
+    const grid = slots.map((time, slotIndex) => `
+      <div class="time">${safe(time)}</div>
+
+      ${days.map((day, dayIndex) => {
+        const cellLessons = visibleLessons.filter(
+          l => l.day === dayIndex && l.slot === slotIndex
+        );
+
+        const addAction = mode === "group"
+          ? `onclick="v04AddLesson(${dayIndex},${slotIndex},'${safe(group)}')"`
+          : "";
+
+        return `
+          <div
+            class="cell"
+            style="min-height:72px;overflow:auto"
+            ${addAction}
+            ondragover="v07DragOver(event)"
+            ondrop="v07Drop(${dayIndex},${slotIndex},event)"
+          >
+            ${cellLessons.map(lessonCard).join("")}
+          </div>
+        `;
+      }).join("")}
+    `).join("");
+
+    document.getElementById("schedule").innerHTML = `
+      <div class="toolbar" style="display:flex;flex-wrap:wrap;gap:8px">
+        ${modeButtons}
+
+        <span style="flex:1"></span>
+
+        <button
+          class="btn"
+          onclick="
+            settings.currentWeek=Math.max(1,Number(settings.currentWeek||1)-1);
+            save();
+            renderSchedule();
+          "
+        >
+          ← Предыдущая
+        </button>
+
+        <select
+          onchange="settings.currentWeek=Number(this.value);save();renderSchedule()"
+        >
+          ${weekButtons}
+        </select>
+
+        <button
+          class="btn"
+          onclick="
+            settings.currentWeek=Math.min(
+              ${weeks.length},
+              Number(settings.currentWeek||1)+1
+            );
+            save();
+            renderSchedule();
+          "
+        >
+          Следующая →
+        </button>
+      </div>
+
+      <div class="toolbar" style="margin-bottom:12px">
+        ${selector}
+        <span class="small">
+          <b>${safe(semesterLabel())}</b>
+          · неделя ${week}
+          ${period ? " · " + period : ""}
+        </span>
+      </div>
+
+      <div class="card" style="margin-bottom:12px">
+        <b>Расписание на неделю</b><br>
+        <span class="small">
+          ${
+            mode === "all"
+              ? "Показаны все группы одновременно."
+              : "Выбран фильтр: " +
+                (mode === "group" ? group :
+                 mode === "teacher" ? teacher :
+                 room)
+          }
+        </span>
+      </div>
+
+      <div
+        class="schedule"
+        style="
+          overflow:auto;
+          grid-template-columns:90px repeat(6,minmax(150px,1fr));
+          align-items:stretch
+        "
+      >
+        <div class="head">Время</div>
+        ${headers}
+        ${grid}
+      </div>
+    `;
+  }
+
+  settings.scheduleView = settings.scheduleView || "all";
+
+  window.nghuFullScheduleRender = renderFullSchedule;
+  renderSchedule = renderFullSchedule;
+
+  renderFullSchedule();
+})();
+</script>/body></html>
